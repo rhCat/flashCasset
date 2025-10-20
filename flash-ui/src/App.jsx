@@ -213,7 +213,7 @@ function StudyMode() {
           </div>
 
           {/* CARD — deep gray background, white text; fills available space */}
-          <div className="flex-1 grid place-items-center p-3">
+          <div className="flex-1 min-h-0 flex items-center justify-center p-3">
             {current ? (
               <button
                 onClick={() => setFlipped(f => !f)}
@@ -223,14 +223,14 @@ function StudyMode() {
               >
                 {/* Front */}
                 <div
-                  className="absolute inset-0 p-8 grid place-items-center text-center text-white text-4xl font-bold"
+                  className="absolute inset-0 p-8 flex items-center text-center text-white text-4xl font-bold"
                   style={{ backfaceVisibility: "hidden", fontSize: 32, padding: "clamp(16px,4vw,48px)" }}
                 >
                   {current.front}
                 </div>
                 {/* Back */}
                 <div
-                  className="absolute inset-0 p-8 grid place-items-center text-center text-white text-4xl font-bold"
+                  className="absolute inset-0 p-8 flex items-center text-center text-white text-4xl font-bold"
                   style={{ transform: "rotateY(180deg)", backfaceVisibility: "hidden", fontSize: 32, padding: "clamp(16px,4vw,48px)" }}
                 >
                   {current.back}
