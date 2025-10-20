@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSwipeable } from "react-swipeable";
 
 /**
- * Flash Coach — Study & Test
- * Layout: page grid [20% | 60% | 20%], center rows [5vh | 60vh | 5vh | 1fr]
- * Shortcuts: A/1=Again • H/3=Hard • K/5/Space=Know • ←/→/Enter nav • ⌘/Ctrl+K Jump
+ * Flash Coach — Study & Test (no px; only %, fr, and vh)
+ * Layout per mode:
+ *   grid-cols-5 => left 1 col (20%), center 3 cols (60%), right 1 col (20%)
+ *   center column rows via inline style: 5vh header, 70vh card, 5vh actions, rest auto
+ * Shortcuts: A/1 Again • H/3 Hard • K/5/Space Know • ←/→/Enter nav • ⌘/Ctrl+K Jump
  */
 
 // -----------------------------------------------------------------------------
@@ -32,7 +34,6 @@ function parseDeck(raw, defaultSeconds = 12) {
     lastGrade: 0, // 0=unseen, 1=again, 3=hard, 5=know
   }));
 }
-
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const load = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
 
@@ -107,7 +108,6 @@ function useStudyDeck(initialRaw) {
   useEffect(() => { save("study_cards", cards); }, [cards]);
   useEffect(() => { save("study_queue", queue); }, [queue]);
 
-  // Build queue on load / when cards change
   useEffect(() => {
     if (queue.length === 0) {
       const now = Date.now();
@@ -149,7 +149,7 @@ function StudyMode() {
     setFlipped(false);
   }
 
-  // Keyboard shortcuts
+  // Keyboard
   useEffect(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setJumpOpen(true); return; }
@@ -182,9 +182,9 @@ function StudyMode() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[20%_60%_20%] min-h-[82vh] gap-3" {...handlers}>
-      {/* Left tools */}
-      <aside className="hidden md:block">
+    <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
+      {/* Left tools (20%) */}
+      <aside className="hidden md:block col-span-1">
         <div className="sticky top-3 space-y-3">
           <button onClick={() => setJumpOpen(true)} className="w-full px-3 py-2 rounded-lg border bg-white text-sm">🔎 Jump (⌘/Ctrl+K)</button>
           <div className="rounded-lg border bg-white p-3">
@@ -193,62 +193,58 @@ function StudyMode() {
         </div>
       </aside>
 
-      {/* Center column */}
-      <section className="grid grid-rows-[5vh_60vh_5vh_1fr]">
-        {/* header 5% */}
-        <div className="flex items-center justify-between px-1">
-          <div className="text-xs text-neutral-600">
-            {current ? <>Card {index + 1}/{queue.length}</> : <>No cards queued</>}
+      {/* Center (60%) */}
+      <section className="col-span-5 md:col-span-3">
+        <div className="flex flex-col" style={{ minHeight: "82vh" }}>
+          {/* header */}
+          <div className="flex items-center justify-between px-1" style={{ height: "5vh" }}>
+            <div className="text-xs text-neutral-600">
+              {current ? <>Card {index + 1}/{queue.length}</> : <>No cards queued</>}
+            </div>
           </div>
-        </div>
 
-        {/* card 60% */}
-        <div className="flex items-center justify-center">
-          {current ? (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setFlipped(f => !f)}
-              className={`relative block w-full md:w-2/3 lg:w-1/2 max-w-4xl h-[60vh] rounded-2xl shadow-lg border bg-white overflow-hidden transition-transform duration-300 ${flipped ? 'rotate-y-180' : ''}`}
-              style={{ transformStyle: 'preserve-3d' }}
-            >
-              {/* Front */}
-              <div className="absolute inset-0 p-8 flex items-center justify-center text-center text-3xl md:text-5xl font-semibold"
-                   style={{ backfaceVisibility: 'hidden' }}>
-                {current.front}
+          {/* card */}
+          <div className="flex items-center justify-center" style={{ height: "70vh" }}>
+            {current ? (
+              <div
+                role="button" tabIndex={0} onClick={() => setFlipped(f => !f)}
+                className={`relative block w-full md:w-4/5 lg:w-2/3 h-full rounded-2xl shadow-lg border bg-white overflow-hidden transition-transform duration-300 ${flipped ? 'rotate-y-180' : ''}`}
+                style={{ transformStyle: "preserve-3d" }}
+              >
+                {/* Front */}
+                <div className="absolute inset-0 p-8 flex items-center justify-center text-center text-3xl md:text-5xl font-semibold" style={{ backfaceVisibility: "hidden" }}>
+                  {current.front}
+                </div>
+                {/* Back */}
+                <div className="absolute inset-0 p-8 flex items-center justify-center text-center text-xl md:text-3xl text-neutral-700 bg-white" style={{ transform: "rotateY(180deg)", backfaceVisibility: "hidden" }}>
+                  {current.back}
+                </div>
               </div>
-              {/* Back */}
-              <div className="absolute inset-0 p-8 flex items-center justify-center text-center text-xl md:text-3xl text-neutral-700 bg-white"
-                   style={{ transform: 'rotateY(180deg)', backfaceVisibility: 'hidden' }}>
-                {current.back}
+            ) : <div className="text-neutral-500">Paste or import a deck to begin.</div>}
+          </div>
+
+          {/* actions */}
+          <div className="grid grid-cols-3 gap-3 items-center justify-items-center w-full md:w-4/5 lg:w-2/3 mx-auto" style={{ height: "5vh" }}>
+            <button onClick={() => handleGrade(1)} className="w-full py-2 rounded-xl bg-red-600 text-white text-sm font-medium">✗ Again (A/1)</button>
+            <button onClick={() => handleGrade(3)} className="w-full py-2 rounded-xl bg-amber-500 text-white text-sm font-medium">△ Hard (H/3)</button>
+            <button onClick={() => handleGrade(5)} className="w-full py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium">✓ Know (K/5/Space)</button>
+          </div>
+
+          {/* rest */}
+          <div className="mt-4 w-full md:w-4/5 lg:w-2/3 mx-auto">
+            <details className="p-4 border rounded-xl bg-white">
+              <summary className="cursor-pointer text-sm text-neutral-700">Deck & Settings</summary>
+              <div className="mt-3 grid gap-3">
+                <textarea className="w-full h-40 border rounded-xl p-3" value={deckRaw} onChange={(e)=>setDeckRaw(e.target.value)} placeholder={SAMPLE}></textarea>
+                <div className="text-xs text-neutral-500">CSV (front,back[,durationSec]) or <code>front|back</code> per line.</div>
               </div>
-            </div>
-          ) : (
-            <div className="text-neutral-500">Paste or import a deck to begin.</div>
-          )}
-        </div>
-
-        {/* choices 5% */}
-        <div className="grid grid-cols-3 gap-3 items-center justify-items-center w-full md:w-2/3 lg:w-1/2 mx-auto">
-          <button onClick={() => handleGrade(1)} className="w-full py-2 rounded-xl bg-red-600 text-white text-sm font-medium">✗ Again (A/1)</button>
-          <button onClick={() => handleGrade(3)} className="w-full py-2 rounded-xl bg-amber-500 text-white text-sm font-medium">△ Hard (H/3)</button>
-          <button onClick={() => handleGrade(5)} className="w-full py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium">✓ Know (K/5/Space)</button>
-        </div>
-
-        {/* rest */}
-        <div className="mt-4 w-full max-w-3xl mx-auto">
-          <details className="p-4 border rounded-xl bg-white">
-            <summary className="cursor-pointer text-sm text-neutral-700">Deck & Settings</summary>
-            <div className="mt-3 grid gap-3">
-              <textarea className="w-full h-40 border rounded-xl p-3" value={deckRaw} onChange={(e)=>setDeckRaw(e.target.value)} placeholder={SAMPLE}></textarea>
-              <div className="text-xs text-neutral-500">CSV (front,back[,durationSec]) or <code>front|back</code> per line.</div>
-            </div>
-          </details>
+            </details>
+          </div>
         </div>
       </section>
 
-      {/* Right matrix */}
-      <aside className="hidden md:block">
+      {/* Right matrix (20%) */}
+      <aside className="hidden md:block col-span-1">
         <div className="sticky top-3 rounded-lg border bg-white p-3">
           <div className="text-xs font-medium mb-2">Card Matrix</div>
           <div className="grid grid-cols-6 gap-2">
@@ -265,7 +261,6 @@ function StudyMode() {
         </div>
       </aside>
 
-      {/* Jump */}
       <JumpPalette open={jumpOpen} onClose={() => setJumpOpen(false)} items={cards} onSelect={jumpToCard} />
     </div>
   );
@@ -323,7 +318,7 @@ function TestMode() {
       setCountdown(dur);
       timerRef.current = window.setInterval(() => {
         setCountdown(c => {
-          if (c <= 1) { clearInterval(timerRef.current); nextCard("timeout"); return 0; }
+          if (c <= 1) { clearInterval(timerRef.current); nextCard(); return 0; }
           return c - 1;
         });
       }, 1000);
@@ -337,13 +332,11 @@ function TestMode() {
     if (!deck.length) { alert("No cards. Paste a deck first."); return; }
     setRecordings({}); setIdx(0); setStage("running");
   }
-
   function nextCard() {
     stopTimers(); stopCardRecording();
     if (idx + 1 < deck.length) setIdx(i => i + 1);
     else setStage("review");
   }
-
   useEffect(() => () => { stopTimers(); stopCardRecording(); }, []);
   useEffect(() => {
     function onKey(e) {
@@ -366,18 +359,15 @@ function TestMode() {
   }
 
   function statusClass(i) {
-    if (stage === "running") {
-      if (i === idx) return "bg-blue-600 text-white";
-      return "bg-neutral-300";
-    }
+    if (stage === "running") return i === idx ? "bg-blue-600 text-white" : "bg-neutral-300";
     const has = recordings[deck[i]?.id];
     return has ? "bg-emerald-600 text-white" : "bg-neutral-300";
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[20%_60%_20%] min-h-[82vh] gap-3" {...handlers}>
+    <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
       {/* Left tools */}
-      <aside className="hidden md:block">
+      <aside className="hidden md:block col-span-1">
         <div className="sticky top-3 space-y-3">
           {stage !== "running" && (
             <button onClick={startTest} className="w-full px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm">Start Test</button>
@@ -390,69 +380,73 @@ function TestMode() {
         </div>
       </aside>
 
-      {/* Center column rows */}
-      <section className="grid grid-rows-[5vh_60vh_5vh_1fr]">
-        {/* header */}
-        <div className="flex items-center justify-between px-1">
-          <div className="text-xs text-neutral-600">
-            {stage === "running" ? <>Card {idx + 1}/{deck.length} • <b>{countdown}s</b></> : <>Cards: {deck.length}</>}
+      {/* Center */}
+      <section className="col-span-5 md:col-span-3">
+        <div className="flex flex-col" style={{ minHeight: "82vh" }}>
+          {/* header */}
+          <div className="flex items-center justify-between px-1" style={{ height: "5vh" }}>
+            <div className="text-xs text-neutral-600">
+              {stage === "running" ? <>Card {idx + 1}/{deck.length} • <b>{countdown}s</b></> : <>Cards: {deck.length}</>}
+            </div>
           </div>
-        </div>
 
-        {/* card */}
-        <div className="flex items-center justify-center">
-          {stage === "setup" && (
-            <div className="w-full max-w-3xl mx-auto">
-              <div className="rounded-xl border bg-white p-4">
-                <label className="block text-sm mb-1">Deck (CSV: front,back[,durationSec])</label>
-                <textarea className="w-full h-44 border rounded-xl p-3" value={deckRaw} onChange={e => setDeckRaw(e.target.value)} placeholder={SAMPLE}></textarea>
-                <div className="text-xs text-neutral-500 mt-2">Optional 3rd column sets per-card seconds.</div>
-                <button onClick={startTest} className="mt-3 px-4 py-2 rounded-xl bg-emerald-600 text-white">Start Test</button>
+          {/* card (English only) */}
+          <div className="flex items-center justify-center" style={{ height: "70vh" }}>
+            {stage === "setup" && (
+              <div className="w-full md:w-4/5 lg:w-2/3 mx-auto">
+                <div className="rounded-xl border bg-white p-4">
+                  <label className="block text-sm mb-1">Deck (CSV: front,back[,durationSec])</label>
+                  <textarea className="w-full h-44 border rounded-xl p-3" value={deckRaw} onChange={e => setDeckRaw(e.target.value)} placeholder={SAMPLE}></textarea>
+                  <div className="text-xs text-neutral-500 mt-2">Optional 3rd column sets per-card seconds.</div>
+                  <button onClick={startTest} className="mt-3 px-4 py-2 rounded-xl bg-emerald-600 text-white">Start Test</button>
+                </div>
+              </div>
+            )}
+            {stage === "running" && deck[idx] && (
+              <div className="block w-full md:w-4/5 lg:w-2/3 h-full rounded-2xl shadow-lg border bg-white overflow-hidden flex items-center justify-center">
+                <div className="p-8 text-center text-4xl md:text-6xl font-semibold">{deck[idx].front}</div>
+              </div>
+            )}
+            {stage === "review" && (
+              <div className="text-neutral-600">Review your recordings on the right; then process results below.</div>
+            )}
+          </div>
+
+          {/* actions */}
+          <div className="flex items-center justify-center" style={{ height: "5vh" }}>
+            {stage === "running" ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-4/5 lg:w-2/3">
+                <button onClick={() => nextCard()} className="py-3 rounded-xl bg-blue-600 text-white font-medium">Next (→ / Enter)</button>
+              </div>
+            ) : <div className="text-xs text-neutral-600">Ready.</div>}
+          </div>
+
+          {/* rest (review actions) */}
+          {stage === "review" && (
+            <div className="px-1">
+              <div className="rounded-xl border bg-white p-4 md:w-4/5 lg:w-2/3 mx-auto">
+                <h4 className="font-medium mb-2">Process Results</h4>
+                <button onClick={processResults} className="px-4 py-2 rounded-lg bg-emerald-600 text-white">Process with STT + LLM</button>
+                {evalJson && (
+                  <div className="mt-3 space-y-3">
+                    {evalJson.results?.map(r => (
+                      <div key={r.id} className="p-3 border rounded-xl">
+                        <div className="font-medium">{r.front} — <span className="text-neutral-600">{r.back}</span></div>
+                        <div className="text-sm mt-1">{r.feedback}</div>
+                        <div className="text-xs mt-1">sim {r.similarity} • f1 {r.f1} • prec {r.precision} • rec {r.recall}</div>
+                        {r.missing_keywords?.length > 0 && <div className="text-xs mt-1">Missing: {r.missing_keywords.join(", ")}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
-          {stage === "running" && deck[idx] && (
-            <div className="block w-full md:w-2/3 lg:w-1/2 max-w-4xl h-[60vh] rounded-2xl shadow-lg border bg-white overflow-hidden flex items-center justify-center">
-              <div className="p-8 text-center text-4xl md:text-6xl font-semibold">{deck[idx].front}</div>
-            </div>
-          )}
-          {stage === "review" && <div className="text-neutral-600">Review your recordings on the right; then process results below.</div>}
         </div>
-
-        {/* choices */}
-        <div className="flex items-center justify-center">
-          {stage === "running" ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-2/3 lg:w-1/2 max-w-4xl">
-              <button onClick={() => nextCard()} className="py-3 rounded-xl bg-blue-600 text-white font-medium">Next (→ / Enter)</button>
-            </div>
-          ) : <div className="text-xs text-neutral-600">Ready.</div>}
-        </div>
-
-        {/* rest (review actions) */}
-        {stage === "review" && (
-          <div className="px-1">
-            <div className="rounded-xl border bg-white p-4 max-w-5xl mx-auto">
-              <h4 className="font-medium mb-2">Process Results</h4>
-              <button onClick={processResults} className="px-4 py-2 rounded-lg bg-emerald-600 text-white">Process with STT + LLM</button>
-              {evalJson && (
-                <div className="mt-3 space-y-3">
-                  {evalJson.results?.map(r => (
-                    <div key={r.id} className="p-3 border rounded-xl">
-                      <div className="font-medium">{r.front} — <span className="text-neutral-600">{r.back}</span></div>
-                      <div className="text-sm mt-1">{r.feedback}</div>
-                      <div className="text-xs mt-1">sim {r.similarity} • f1 {r.f1} • prec {r.precision} • rec {r.recall}</div>
-                      {r.missing_keywords?.length > 0 && <div className="text-xs mt-1">Missing: {r.missing_keywords.join(", ")}</div>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </section>
 
       {/* Right matrix */}
-      <aside className="hidden md:block">
+      <aside className="hidden md:block col-span-1">
         <div className="sticky top-3 rounded-lg border bg-white p-3">
           <div className="text-xs font-medium mb-2">Card Matrix</div>
           <div className="grid grid-cols-6 gap-2">
@@ -473,28 +467,28 @@ function TestMode() {
 }
 
 // -----------------------------------------------------------------------------
-// Root Shell (centered, 14px title)
+// Root Shell (small title; centered grid wrapper)
 // -----------------------------------------------------------------------------
 export default function App() {
   const [mode, setMode] = useState(load("ui_mode", "study"));
   useEffect(() => { save("ui_mode", mode); }, [mode]);
 
   return (
-    <div className="min-h-screen bg-neutral-100 grid grid-cols-1 md:grid-cols-[20%_60%_20%]">
-      <div className="hidden md:block" />
-      <div className="min-h-screen grid grid-rows-[auto_1fr]">
-        <header className="p-3 flex items-center justify-between">
-          <h1 className="text-sm font-normal">🃏 Flash Coach</h1>
-          <div className="flex items-center gap-2 text-sm">
-            <button onClick={() => setMode("study")} className={`px-3 py-1 rounded-full border ${mode === "study" ? "bg-neutral-900 text-white" : "bg-white"}`}>Study</button>
-            <button onClick={() => setMode("test")}  className={`px-3 py-1 rounded-full border ${mode === "test"  ? "bg-neutral-900 text-white" : "bg-white"}`}>Test</button>
-          </div>
-        </header>
-        <main className="px-2 md:px-0">
-          {mode === "study" ? <StudyMode /> : <TestMode />}
-        </main>
+    <div className="min-h-screen bg-neutral-100">
+      {/* Small title in a DIV (avoid global h1 overrides) */}
+      <div className="p-3 flex items-center justify-between">
+        <div className="text-sm">🃏 Flash Coach</div>
+        <div className="flex items-center gap-2 text-sm">
+          <button onClick={() => setMode("study")} className={`px-3 py-1 rounded-full border ${mode === "study" ? "bg-neutral-900 text-white" : "bg-white"}`}>Study</button>
+          <button onClick={() => setMode("test")}  className={`px-3 py-1 rounded-full border ${mode === "test"  ? "bg-neutral-900 text-white" : "bg-white"}`}>Test</button>
+        </div>
       </div>
-      <div className="hidden md:block" />
+
+      {/* Mode content renders its own 20/60/20 grid */}
+      <main className="px-2 md:px-4">
+        {mode === "study" ? <StudyMode /> : <TestMode />}
+      </main>
+
       <style>{`.rotate-y-180{transform:rotateY(180deg);}`}</style>
     </div>
   );
