@@ -205,6 +205,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       else if (k === "arrowup") grade(3);
       else if (k === "arrowdown" || k === " ") { e.preventDefault(); grade(5); }
       else if (k === "f") setFlipped(f => !f);
+      else if (k === "r") jumpRandom();   // 🎲 random
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -292,16 +293,6 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       <aside className="hidden md:block col-span-1" />
       <section className="col-span-5 md:col-span-3">
         <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
-          {/* header — Deck • Total • Card n/m */}
-          <div className="flex items-center justify-between px-3 py-2 gap-3">
-            <div className="text-xs text-neutral-700">
-              <span className="font-medium">Deck:</span> <span className="font-semibold">{deckName}</span>
-              <span className="mx-1 text-neutral-400">•</span>
-              <span> Total: <span className="font-semibold">{cards.length}</span></span>
-              <span className="mx-1 text-neutral-400">•</span>
-              {countText}
-            </div>
-          </div>
 
           {/* CARD — overlay swap; geometric center */}
           <div className="flex-1 min-h-0 flex items-center justify-center p-3">
@@ -335,21 +326,29 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
             )}
           </div>
 
-          {/* footer — hint + Mark + Random */}
-          <div className="px-3 py-2 flex items-center justify-between gap-3">
-            <div className="text-xs text-neutral-500">
-              Swipe ←/→ to move • ↑ = Hard • ↓/Space = Know • Tap card to flip • R = Random
+          {/* footer — hint on left • Mark + Random + Filters on right (single row) */}
+          <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
+            {/* left: tooltip + count */}
+            <div className="flex flex-col">
+              <div className="text-xs text-neutral-500">
+                Swipe ←/→ to move • ↑ = Hard • ↓/Space = Know • Tap card to flip • R = Random
+              </div>
+              <div className="text-xs text-neutral-700 mt-1">
+                {countText}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+
+            <div className="flex items-center gap-2 flex-wrap">
               {current && (
                 <button
                   onClick={() => replaceCard({ ...current, marked: !current.marked })}
                   className={`px-3 py-1 rounded-md border text-xs ${current.marked ? "bg-purple-600 text-white" : "bg-white"}`}
-                  title="Toggle mark"
+                  title="Toggle mark (M)"
                 >
                   ✳︎ Mark
                 </button>
               )}
+
               <button
                 onClick={jumpRandom}
                 className="px-3 py-1 rounded-md border text-xs bg-white"
@@ -357,6 +356,23 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
               >
                 🎲 Random
               </button>
+
+              {/* small divider (optional) */}
+              <span className="hidden sm:inline-block w-px h-5 bg-neutral-300 mx-1" />
+
+              {/* Filters now live here */}
+              {["all", "marked", "hard"].map(f => (
+                <button
+                  key={f}
+                  onClick={() => { setFilter(f); setI(0); }}
+                  className={`px-2 py-1 rounded-full border text-xs ${
+                    filter === f ? "bg-neutral-900 text-white" : "bg-white"
+                  }`}
+                  title={`Show ${f}`}
+                >
+                  {f[0].toUpperCase() + f.slice(1)}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -542,22 +558,6 @@ export default function App() {
           </button>
 
           {/* Filters shown when in Study mode */}
-          {mode === "study" && (
-            <div className="ml-2 flex items-center gap-1">
-              {["all","marked","hard"].map(f => (
-                <button
-                  key={f}
-                  onClick={() => setUiFilter(f)}
-                  className={`px-2 py-1 rounded-full border text-xs ${
-                    uiFilter===f ? "bg-neutral-900 text-white":"bg-white"
-                  }`}
-                  title={`Show ${f}`}
-                >
-                  {f[0].toUpperCase()+f.slice(1)}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </header>
 
