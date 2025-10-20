@@ -1,0 +1,13 @@
+# One of: openai, llamacpp, vllm, ollama, gemini
+provider: llamacpp
+
+# generic fields
+api_key: sk-local                     # any non-empty for local OpenAI-compatible
+model: llama-3.1-8b-instruct
+base_url: http://127.0.0.1:8080/v1    # llama.cpp /v1 chat server
+shared_key: ""                        # not used here, but kept for parity
+
+# provider-specific (optional)
+gemini:
+  model: gemini-2.5-flash
+  temperature: 1

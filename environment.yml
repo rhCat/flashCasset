@@ -1,0 +1,23 @@
+name: flashcasset
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  # native/libs
+  - ffmpeg
+  - numpy
+  - pyyaml
+  # optional but handy
+  - uvicorn
+  - fastapi
+  - httpx
+  - typing_extensions
+  # UI
+  - gradio
+  - pip:
+      # LLM clients
+      - "openai>=1.40.0"
+      - google-generativeai
+      # local STT (Whisper)
+      - faster-whisper
