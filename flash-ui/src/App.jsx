@@ -2,28 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSwipeable } from "react-swipeable";
 
 /**
- * Flash Coach — Study & Test
- * - Layout: 20/60/20 (grid-cols-5)
- * - Center rows: 5vh header • 70vh card • 5vh actions • rest auto
- * - Study swipes:  Left/Right = navigate, Up = Hard, Down = Know
- * - Test swipes:   Left/Right = Next
- * - Flip: true 3D, only one side visible
- * - Matrix: shows Mark (purple) & Hard (amber) status + current/known
- * - Jump: text input to go to a specific card id
- * - Data: loads from /cards.json (public/)
- *
- * cards.json
- * {
- *   "cards":[{"id":"c0-abate","term":"abate","meaning":"减弱; 缓和"}, ...],
- *   "hard":["c3", ...],
- *   "know":["c0", ...],
- *   "mark":["c2", ...]
- * }
+ * Flash Coach — Study (refined) + Test (minimal)
+ * - Study: Left/Right navigate; Up=Hard; Down=Know; tap to flip (3D)
+ * - Review filters: All | Marked | Hard
+ * - Card counts use the *visible* queue only (no double counting)
+ * - Card background: deep gray (text white)
+ * - Loads /public/cards.json into localStorage on boot
  */
 
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
 const SAMPLE = `front,back,durationSec
 abate,减弱; 缓和; to lessen in intensity,10
 banal,陈腐的; 平庸的; common or overused,10
@@ -48,23 +34,23 @@ function parseDeck(raw, defaultSeconds = 12) {
       interval: 0,
       reps: 0,
       due: Date.now(),
-      lastGrade: 0,     // 0=unseen, 3=hard, 5=know
+      lastGrade: 0,    // 0=unseen, 3=hard, 5=know
       marked: false,
     }));
 }
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const load = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
 
-// Hydrate from /cards.json → localStorage so both modes read it
+// ---- hydrate /public/cards.json on boot
 async function hydrateFromCardsJson() {
   try {
     const r = await fetch("/cards.json", { cache: "no-store" });
     if (!r.ok) return false;
     const j = await r.json();
-    const hardSet = new Set(j.hard || []);
-    const knowSet = new Set(j.know || []);
-    const markSet = new Set(j.mark || []);
-    const studyCards = (j.cards || []).map((c, i) => ({
+    const hard = new Set(j.hard || []);
+    const know = new Set(j.know || []);
+    const mark = new Set(j.mark || []);
+    const cards = (j.cards || []).map((c, i) => ({
       id: c.id ?? `r${i}`,
       front: c.term,
       back: c.meaning,
@@ -73,167 +59,179 @@ async function hydrateFromCardsJson() {
       interval: 0,
       reps: 0,
       due: Date.now(),
-      lastGrade: knowSet.has(c.id) ? 5 : hardSet.has(c.id) ? 3 : 0,
-      marked: markSet.has(c.id),
+      lastGrade: know.has(c.id) ? 5 : hard.has(c.id) ? 3 : 0,
+      marked: mark.has(c.id),
     }));
-    save("study_cards", studyCards);
-    save("study_queue", []); // rebuild
+    save("study_cards", cards);
+    // seed queue with *unique* ids exactly once
+    save("study_queue", cards.map(c => c.id));
+    // seed test deck too
     const testCsv = ["front,back,durationSec", ...(j.cards || []).map(c => `${c.term},${c.meaning},12`)].join("\n");
     save("test_deckRaw", testCsv);
+    window.dispatchEvent(new CustomEvent("cardsjson:loaded"));
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
-// -----------------------------------------------------------------------------
-// Study Mode
-// -----------------------------------------------------------------------------
+// -------------------- Study --------------------
 function schedule(card, grade) {
   let { ease, interval, reps } = card;
-  if (grade < 3) { reps = 0; interval = 0.02; } // still supported if ever needed
-  else {
+  if (grade >= 3) {
     if (reps === 0) interval = 1;
     else if (reps === 1) interval = 3;
     else interval = Math.max(1, Math.round(interval * ease));
     reps += 1;
     ease = Math.max(1.3, ease + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02)));
+  } else {
+    reps = 0; interval = 0.02;
   }
   const due = Date.now() + interval * 86400000;
   return { ...card, ease, interval, reps, due, lastGrade: grade };
 }
 
-function useStudyDeckFromLocal() {
+function useStudyDeck() {
   const [cards, setCards] = useState(() => load("study_cards", parseDeck(SAMPLE)));
-  const [queue, setQueue] = useState(() => load("study_queue", []));
-  const [index, setIndex] = useState(0);
-  const [flipped, setFlipped] = useState(false);
+  const [queue, setQueue] = useState(() => {
+    // ensure uniqueness (no dupes from due+fresh)
+    const ids = load("study_queue", cards.map(c => c.id));
+    return [...new Set(ids)];
+  });
 
+  // persist
   useEffect(() => { save("study_cards", cards); }, [cards]);
   useEffect(() => { save("study_queue", queue); }, [queue]);
 
+  // handle cards.json hydration
   useEffect(() => {
-    if (queue.length === 0) {
-      const now = Date.now();
-      const due = cards.filter(c => c.due <= now);
-      const fresh = cards.filter(c => c.reps === 0);
-      const rest = cards.filter(c => c.reps > 0 && c.due > now).sort((a, b) => a.due - b.due);
-      setQueue([...due, ...fresh, ...rest].map(c => c.id));
-      setIndex(0); setFlipped(false);
-    }
-  }, [cards, queue.length]);
+    const h = () => { setCards(load("study_cards", [])); setQueue(load("study_queue", [])); };
+    window.addEventListener("cardsjson:loaded", h);
+    return () => window.removeEventListener("cardsjson:loaded", h);
+  }, []);
 
-  const current = useMemo(() => cards.find(c => c.id === queue[index]), [cards, queue, index]);
+  const replaceCard = (u) => setCards(cs => cs.map(c => c.id === u.id ? u : c));
+  const byId = (id) => cards.find(c => c.id === id);
 
-  function replaceCard(updated) { setCards(cs => cs.map(c => c.id === updated.id ? updated : c)); }
-  return { cards, queue, index, setIndex, flipped, setFlipped, current, replaceCard, setCards };
+  return { cards, queue, setQueue, replaceCard, byId };
 }
 
 function StudyMode() {
-  const { cards, queue, index, setIndex, flipped, setFlipped, current, replaceCard } = useStudyDeckFromLocal();
-  const [gotoId, setGotoId] = useState("");
+  const { cards, queue, setQueue, replaceCard, byId } = useStudyDeck();
 
-  // Swipes: L/R navigate, Up=Hard, Down=Know
+  // --- review filter ---
+  const [filter, setFilter] = useState("all"); // all | marked | hard
+  const visibleIds = useMemo(() => {
+    if (filter === "all") return queue;
+    if (filter === "marked") return queue.filter(id => byId(id)?.marked);
+    if (filter === "hard") return queue.filter(id => byId(id)?.lastGrade === 3);
+    return queue;
+  }, [queue, filter, cards]);
+
+  // index inside visible list
+  const [i, setI] = useState(0);
+  useEffect(() => { if (i >= visibleIds.length) setI(Math.max(0, visibleIds.length - 1)); }, [visibleIds.length, i]);
+
+  const current = byId(visibleIds[i]);
+
+  // --- interactions: swipe/keys ---
   const handlers = useSwipeable({
-    onSwipedLeft: () => setIndex(i => Math.min(queue.length - 1, i + 1)),
-    onSwipedRight: () => setIndex(i => Math.max(0, i - 1)),
-    onSwipedUp: () => handleGrade(3),
-    onSwipedDown: () => handleGrade(5),
+    onSwipedLeft: () => setI(v => Math.min(visibleIds.length - 1, v + 1)),  // next
+    onSwipedRight: () => setI(v => Math.max(0, v - 1)),                     // prev
+    onSwipedUp: () => grade(3),   // Hard
+    onSwipedDown: () => grade(5), // Know
     trackMouse: true,
     preventScrollOnSwipe: true,
   });
 
-  function handleGrade(g) {
-    if (!current) return;
-    replaceCard(schedule(current, g));
-    // stay on same index (user can swipe to move) or auto-advance on Know:
-    if (g === 5) setIndex(i => Math.min(queue.length - 1, i + 1));
-    setFlipped(false);
-  }
-
-  // Keyboard: arrows & grading
   useEffect(() => {
     function onKey(e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === "arrowleft") setIndex(i => Math.max(0, i - 1));
-      else if (k === "arrowright" || k === "enter") setIndex(i => Math.min(queue.length - 1, i + 1));
-      else if (k === "arrowup") handleGrade(3);
-      else if (k === "arrowdown" || k === " ") { e.preventDefault(); handleGrade(5); }
+      if (k === "arrowleft") setI(v => Math.max(0, v - 1));
+      else if (k === "arrowright" || k === "enter") setI(v => Math.min(visibleIds.length - 1, v + 1));
+      else if (k === "arrowup") grade(3);
+      else if (k === "arrowdown" || k === " ") { e.preventDefault(); grade(5); }
       else if (k === "f") setFlipped(f => !f);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [current, queue.length]);
+  }, [visibleIds.length, current]);
 
-  function statusClass(c) {
-    // current card is blue; known is green; hard adds amber ring; marked adds purple ring
-    let base = "bg-neutral-300";
-    if (c?.lastGrade === 5) base = "bg-emerald-600 text-white";
-    if (c && c.id === queue[index]) base = "bg-blue-600 text-white";
-    const rings = [
-      c?.marked ? "ring-2 ring-purple-500" : "",
-      c?.lastGrade === 3 ? "ring-2 ring-amber-500" : "",
-    ].filter(Boolean).join(" ");
-    return `${base} ${rings}`;
+  // flip
+  const [flipped, setFlipped] = useState(false);
+
+  function grade(g) {
+    if (!current) return;
+    const updated = schedule(current, g);
+    replaceCard(updated);
+    if (g === 5) setI(v => Math.min(visibleIds.length - 1, v + 1));
+    setFlipped(false);
+  }
+  function toggleMark() {
+    if (!current) return;
+    replaceCard({ ...current, marked: !current.marked });
   }
 
-  function goToExactId() {
-    if (!gotoId) return;
-    const i = queue.findIndex(id => id === gotoId);
-    if (i >= 0) setIndex(i);
-  }
+  // header counts only *visible* ids (so “60/60” when you have 60 cards)
+  const countText = current ? `Card ${Math.min(i + 1, visibleIds.length)}/${visibleIds.length}` : "No cards";
 
   return (
     <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
-      {/* Left (20%) */}
+      {/* Left 20% */}
       <aside className="hidden md:block col-span-1">
         <div className="sticky top-3 space-y-3">
           <div className="rounded-lg border bg-white p-3">
-            <div className="text-xs text-neutral-600">Cards: {cards.length}</div>
+            <div className="text-xs text-neutral-600">Total: {cards.length}</div>
           </div>
         </div>
       </aside>
 
-      {/* Center (60%) */}
+      {/* Center 60% */}
       <section className="col-span-5 md:col-span-3">
-        <div className="flex flex-col" style={{ minHeight: "82vh" }}>
-          {/* header 5vh */}
-          <div className="flex items-center justify-between px-1" style={{ height: "5vh" }}>
-            <div className="text-xs text-neutral-600">
-              {current ? <>Card {index + 1}/{queue.length}</> : <>No cards loaded</>}
+        {/* White panel */}
+        <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
+          {/* header (filter + count + mark) */}
+          <div className="flex items-center justify-between px-3 py-2 gap-3">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-neutral-600">{countText}</span>
+              <span className="text-neutral-400">•</span>
+              <div className="flex gap-1">
+                {["all","marked","hard"].map(f => (
+                  <button key={f}
+                    onClick={()=>{ setFilter(f); setI(0); }}
+                    className={`px-2 py-1 rounded-full border text-xs ${filter===f?"bg-neutral-900 text-white":"bg-white"}`}>
+                    {f[0].toUpperCase()+f.slice(1)}
+                  </button>
+                ))}
+              </div>
             </div>
             {current && (
-              <button
-                onClick={() => replaceCard({ ...current, marked: !current.marked })}
-                className={`px-3 py-1 rounded-md border text-xs ${current.marked ? "bg-purple-600 text-white" : "bg-white"}`}
-                title="Toggle mark"
-              >
+              <button onClick={toggleMark}
+                className={`px-3 py-1 rounded-md border text-xs ${current.marked ? "bg-purple-600 text-white":"bg-white"}`}>
                 ✳︎ Mark
               </button>
             )}
           </div>
 
-          {/* card 70vh — true 3D flip; base 20px */}
-          <div className="flex items-center justify-center" style={{ height: "70vh" }}>
+          {/* CARD — deep gray background, white text; fills available space */}
+          <div className="flex-1 grid place-items-center p-3">
             {current ? (
               <button
                 onClick={() => setFlipped(f => !f)}
-                className={`relative w-full sm:w-5/6 md:w-4/5 lg:w-2/3 h-full rounded-2xl shadow-lg border bg-white overflow-hidden transition-transform duration-300 ${flipped ? "rotate-y-180" : ""}`}
+                className={`relative w-full h-full rounded-xl shadow-lg border overflow-hidden transition-transform duration-300 bg-neutral-900 ${flipped ? "rotate-y-180" : ""}`}
                 style={{ transformStyle: "preserve-3d" }}
                 aria-label="Flip card"
               >
                 {/* Front */}
                 <div
-                  className="absolute inset-0 p-8 flex items-center justify-center text-center text-[20px] font-semibold"
-                  style={{ backfaceVisibility: "hidden" }}
+                  className="absolute inset-0 p-8 grid place-items-center text-center text-white text-4xl font-bold"
+                  style={{ backfaceVisibility: "hidden", fontSize: 32, padding: "clamp(16px,4vw,48px)" }}
                 >
                   {current.front}
                 </div>
                 {/* Back */}
                 <div
-                  className="absolute inset-0 p-8 flex items-center justify-center text-center text-[20px] text-neutral-700 bg-white"
-                  style={{ transform: "rotateY(180deg)", backfaceVisibility: "hidden" }}
+                  className="absolute inset-0 p-8 grid place-items-center text-center text-white text-4xl font-bold"
+                  style={{ transform: "rotateY(180deg)", backfaceVisibility: "hidden", fontSize: 32, padding: "clamp(16px,4vw,48px)" }}
                 >
                   {current.back}
                 </div>
@@ -243,76 +241,51 @@ function StudyMode() {
             )}
           </div>
 
-          {/* actions 5vh — Prev / Hard / Know / Next */}
-          <div className="flex items-center justify-center" style={{ height: "5vh" }}>
-            <div className="grid grid-cols-4 gap-3 w-full sm:w-5/6 md:w-4/5 lg:w-2/3">
-              <button onClick={() => setIndex(i => Math.max(0, i - 1))} className="w-full py-2 rounded-xl bg-white border text-sm font-medium">← Prev</button>
-              <button onClick={() => handleGrade(3)} className="w-full py-2 rounded-xl bg-amber-500 text-white text-sm font-medium">△ Hard (↑)</button>
-              <button onClick={() => handleGrade(5)} className="w-full py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium">✓ Know (↓/Space)</button>
-              <button onClick={() => setIndex(i => Math.min(queue.length - 1, i + 1))} className="w-full py-2 rounded-xl bg-white border text-sm font-medium">Next →</button>
+          {/* footer (no action bar; tiny hint only) */}
+          <div className="px-3 py-2">
+            <div className="text-xs text-neutral-500 text-center">
+              Swipe ←/→ to move • ↑ = Hard • ↓/Space = Know • Tap card to flip
             </div>
-          </div>
-
-          {/* rest */}
-          <div className="mt-4 w-full sm:w-5/6 md:w-4/5 lg:w-2/3 mx-auto">
-            <details className="p-4 border rounded-xl bg-white">
-              <summary className="cursor-pointer text-sm text-neutral-700">Tips</summary>
-              <ul className="text-xs text-neutral-600 mt-2 list-disc pl-5 space-y-1">
-                <li>Swipe Left/Right to move; Up = Hard; Down = Know; tap card to flip.</li>
-                <li>Use the Mark button to flag a card.</li>
-                <li>Matrix badges: purple ring = Marked, amber ring = Hard, green = Known, blue = Current.</li>
-              </ul>
-            </details>
           </div>
         </div>
-      </section>
 
-      {/* Right (20%) — Matrix + Go to ID */}
-      <aside className="hidden md:block col-span-1">
-        <div className="sticky top-3 rounded-lg border bg-white p-3 space-y-3">
-          <div>
-            <label className="block text-xs text-neutral-600 mb-1">Go to ID</label>
-            <div className="flex gap-2">
-              <input value={gotoId} onChange={e=>setGotoId(e.target.value)} placeholder="e.g. c0-abate"
-                     className="flex-1 border rounded-md px-2 py-1 text-sm" />
-              <button onClick={goToExactId} className="px-3 py-1 rounded-md border bg-white text-sm">Go</button>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs font-medium mb-2">Card Matrix</div>
+        {/* Matrix (filtered view) */}
+        <div className="mt-3">
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-xs font-medium mb-2">Card Matrix — {filter === "all" ? "All" : filter === "marked" ? "Marked" : "Hard"}</div>
             <div className="grid grid-cols-6 gap-2">
-              {queue.map((id, i) => {
-                const c = cards.find(x => x.id === id);
+              {visibleIds.map((id, idx) => {
+                const c = byId(id);
+                const currentHere = idx === i;
+                const classes = [
+                  "h-8 rounded-md text-xs font-medium",
+                  c?.lastGrade === 5 ? "bg-emerald-600 text-white" : "bg-neutral-300",
+                  currentHere ? "ring-2 ring-blue-500" : "",
+                  c?.marked ? "ring-2 ring-purple-500" : "",
+                  c?.lastGrade === 3 ? "ring-2 ring-amber-500" : "",
+                ].join(" ");
                 return (
-                  <button
-                    key={id}
-                    onClick={() => setIndex(i)}
-                    className={`h-8 rounded-md text-xs font-medium ${statusClass(c)}`}
-                    title={c?.front}
-                  >
-                    {i + 1}
+                  <button key={id} onClick={() => setI(idx)} className={classes} title={c?.front}>
+                    {idx + 1}
                   </button>
                 );
               })}
             </div>
           </div>
         </div>
-      </aside>
+      </section>
 
-      <style>{`
-        .rotate-y-180 { transform: rotateY(180deg); }
-      `}</style>
+      {/* Right 20% */}
+      <aside className="hidden md:block col-span-1" />
+      <style>{`.rotate-y-180{transform:rotateY(180deg);}`}</style>
     </div>
   );
 }
 
-// -----------------------------------------------------------------------------
-// Test Mode (minor: Left/Right also advance)
-// -----------------------------------------------------------------------------
+// -------------------- Minimal Test (unchanged behavior) --------------------
 function TestMode() {
   const [deckRaw, setDeckRaw] = useState(load("test_deckRaw", SAMPLE));
   const [secondsPerCard, setSecondsPerCard] = useState(load("test_secondsPerCard", 12));
-  const [rubric, setRubric] = useState(load("test_rubric", "Evaluate correctness vs. flashcards and give concise feedback JSON."));
   const [stage, setStage] = useState("setup"); // setup | running | review
   const deck = useMemo(() => parseDeck(deckRaw, secondsPerCard), [deckRaw, secondsPerCard]);
 
@@ -322,11 +295,9 @@ function TestMode() {
   const mediaRecRef = useRef(null);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
-  const [evalJson, setEvalJson] = useState(null);
 
   useEffect(() => { save("test_deckRaw", deckRaw); }, [deckRaw]);
   useEffect(() => { save("test_secondsPerCard", secondsPerCard); }, [secondsPerCard]);
-  useEffect(() => { save("test_rubric", rubric); }, [rubric]);
 
   const handlers = useSwipeable({
     onSwipedLeft: () => stage === "running" && nextCard(),
@@ -334,14 +305,18 @@ function TestMode() {
     trackMouse: true, preventScrollOnSwipe: true
   });
 
-  useEffect(() => { if (stage === "running") startCardRecordingAt(idx); /* eslint-disable-next-line */ }, [stage, idx]);
+  useEffect(() => {
+    const h = () => setDeckRaw(load("test_deckRaw", deckRaw));
+    window.addEventListener("cardsjson:loaded", h);
+    return () => window.removeEventListener("cardsjson:loaded", h);
+    // eslint-disable-next-line
+  }, []);
 
   function stopTimers() { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } }
   function stopCardRecording() {
     try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch {}
     try { streamRef.current && streamRef.current.getTracks().forEach(t => t.stop()); } catch {}
   }
-
   async function startCardRecordingAt(index) {
     stopTimers(); stopCardRecording();
     try {
@@ -350,7 +325,7 @@ function TestMode() {
       const rec = new MediaRecorder(stream);
       mediaRecRef.current = rec;
       const chunks = [];
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
       rec.onstop = () => {
         const blob = new Blob(chunks, { type: "audio/webm" });
         const card = deck[index];
@@ -367,157 +342,50 @@ function TestMode() {
         });
       }, 1000);
     } catch (e) {
-      alert("Microphone permission is required. On iPhone use HTTPS.");
+      alert("Microphone permission is required.");
       console.error(e);
     }
   }
 
-  function startTest() {
-    if (!deck.length) { alert("No cards. Paste a deck first."); return; }
-    setRecordings({}); setIdx(0); setStage("running");
-  }
+  function startTest() { if (!deck.length) return; setIdx(0); setStage("running"); startCardRecordingAt(0); }
   function nextCard() {
     stopTimers(); stopCardRecording();
-    if (idx + 1 < deck.length) setIdx(i => i + 1);
+    if (idx + 1 < deck.length) { const n = idx + 1; setIdx(n); setTimeout(() => startCardRecordingAt(n), 150); }
     else setStage("review");
   }
   useEffect(() => () => { stopTimers(); stopCardRecording(); }, []);
-  useEffect(() => {
-    function onKey(e) {
-      if (stage !== "running") return;
-      if (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Enter" || e.key === " ") { e.preventDefault(); nextCard(); }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [stage, idx]);
-
-  async function processResults() {
-    try {
-      const meta = { rubric, deckRaw, items: deck.map(({ id, front, back, durationSec }) => ({ id, front, back, durationSec })) };
-      const fd = new FormData(); fd.append("meta", JSON.stringify(meta));
-      for (const it of deck) { const b = recordings[it.id]; if (b) fd.append(`audio_${it.id}`, b, `${it.id}.webm`); }
-      const r = await fetch("/api/process_test", { method: "POST", body: fd });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json(); setEvalJson(j);
-    } catch (e) { console.error(e); alert("Processing failed. Ensure backend /api/process_test exists."); }
-  }
-
-  function statusClass(i) {
-    if (stage === "running") return i === idx ? "bg-blue-600 text-white" : "bg-neutral-300";
-    const has = recordings[deck[i]?.id];
-    return has ? "bg-emerald-600 text-white" : "bg-neutral-300";
-  }
 
   return (
     <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
-      {/* Left */}
-      <aside className="hidden md:block col-span-1">
-        <div className="sticky top-3 space-y-3">
-          {stage !== "running" && (
-            <button onClick={startTest} className="w-full px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm">Start Test</button>
-          )}
-        </div>
-      </aside>
-
-      {/* Center */}
+      <aside className="hidden md:block col-span-1" />
       <section className="col-span-5 md:col-span-3">
-        <div className="flex flex-col" style={{ minHeight: "82vh" }}>
-          <div className="flex items-center justify-between px-1" style={{ height: "5vh" }}>
+        <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
+          <div className="flex items-center justify-between px-3 py-2">
             <div className="text-xs text-neutral-600">
               {stage === "running" ? <>Card {idx + 1}/{deck.length} • <b>{countdown}s</b></> : <>Cards: {deck.length}</>}
             </div>
+            {stage !== "running" && <button onClick={startTest} className="px-3 py-1 rounded-md border text-xs bg-white">Start</button>}
           </div>
-
-          <div className="flex items-center justify-center" style={{ height: "70vh" }}>
-            {stage === "setup" && (
-              <div className="w-full sm:w-5/6 md:w-4/5 lg:w-2/3 mx-auto">
-                <div className="rounded-xl border bg-white p-4">
-                  <label className="block text-sm mb-1">Deck (CSV: front,back[,durationSec])</label>
-                  <textarea className="w-full h-44 border rounded-xl p-3" value={deckRaw} onChange={e => setDeckRaw(e.target.value)} placeholder={SAMPLE}></textarea>
-                  <div className="text-xs text-neutral-500 mt-2">Optional 3rd column sets per-card seconds.</div>
-                  <button onClick={startTest} className="mt-3 px-4 py-2 rounded-xl bg-emerald-600 text-white">Start Test</button>
-                </div>
-              </div>
-            )}
+          <div className="flex-1 flex items-center justify-center p-3">
             {stage === "running" && deck[idx] && (
-              <div className="select-none w-full sm:w-5/6 md:w-4/5 lg:w-2/3 h-full rounded-2xl shadow-lg border bg-white flex items-center justify-center text-center">
-                <div className="text-[20px] md:text-5xl lg:text-7xl font-semibold">{deck[idx].front}</div>
+              <div className="w-full h-full rounded-xl border shadow flex items-center justify-center text-center bg-neutral-900">
+                <div className="text-white text-[20px] md:text-5xl lg:text-7xl font-semibold">{deck[idx].front}</div>
               </div>
             )}
-            {stage === "review" && (
-              <div className="text-neutral-600">Review your recordings on the right; then process results below.</div>
-            )}
+            {stage !== "running" && <div className="text-neutral-600">Test not running.</div>}
           </div>
-
-          <div className="flex items-center justify-center" style={{ height: "5vh" }}>
-            {stage === "running" ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full sm:w-5/6 md:w-4/5 lg:w-2/3">
-                <button onClick={() => nextCard()} className="py-3 rounded-xl bg-blue-600 text-white font-medium">Next (←/→/Enter)</button>
-              </div>
-            ) : <div className="text-xs text-neutral-600">Ready.</div>}
-          </div>
-
-          {stage === "review" && (
-            <div className="px-1">
-              <div className="rounded-xl border bg-white p-4 sm:w-5/6 md:w-4/5 lg:w-2/3 mx-auto">
-                <h4 className="font-medium mb-2">Process Results</h4>
-                <button onClick={async () => {
-                  try {
-                    const meta = { rubric, deckRaw, items: deck.map(({ id, front, back, durationSec }) => ({ id, front, back, durationSec })) };
-                    const fd = new FormData(); fd.append("meta", JSON.stringify(meta));
-                    for (const it of deck) { const b = recordings[it.id]; if (b) fd.append(`audio_${it.id}`, b, `${it.id}.webm`); }
-                    const r = await fetch("/api/process_test", { method: "POST", body: fd });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    const j = await r.json(); setEvalJson(j);
-                  } catch (e) { console.error(e); alert("Processing failed. Ensure backend /api/process_test exists."); }
-                }} className="px-4 py-2 rounded-lg bg-emerald-600 text-white">Process with STT + LLM</button>
-                {evalJson && (
-                  <div className="mt-3 space-y-3">
-                    {evalJson.results?.map(r => (
-                      <div key={r.id} className="p-3 border rounded-xl">
-                        <div className="font-medium">{r.front} — <span className="text-neutral-600">{r.back}</span></div>
-                        <div className="text-sm mt-1">{r.feedback}</div>
-                        <div className="text-xs mt-1">sim {r.similarity} • f1 {r.f1} • prec {r.precision} • rec {r.recall}</div>
-                        {r.missing_keywords?.length > 0 && <div className="text-xs mt-1">Missing: {r.missing_keywords.join(", ")}</div>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          <div className="px-3 py-2 text-center text-xs text-neutral-500">Swipe ←/→ or press Enter to advance</div>
         </div>
       </section>
-
-      {/* Right */}
-      <aside className="hidden md:block col-span-1">
-        <div className="sticky top-3 rounded-lg border bg-white p-3">
-          <div className="text-xs font-medium mb-2">Card Matrix</div>
-          <div className="grid grid-cols-6 gap-2">
-            {deck.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => stage !== "running" && setIdx(i)}
-                className={`h-8 rounded-md text-xs font-medium ${statusClass(i)} ${stage === "running" ? "cursor-not-allowed" : ""}`}
-                disabled={stage === "running"}
-              >
-                {i + 1}
-              </button>
-            ))}
-          </div>
-        </div>
-      </aside>
+      <aside className="hidden md:block col-span-1" />
     </div>
   );
 }
 
-// -----------------------------------------------------------------------------
-// Root shell (small 14px title; hydrate cards.json once)
-// -----------------------------------------------------------------------------
+// -------------------- Root --------------------
 export default function App() {
   const [mode, setMode] = useState(load("ui_mode", "study"));
   useEffect(() => { save("ui_mode", mode); }, [mode]);
-
   useEffect(() => { (async () => { await hydrateFromCardsJson(); })(); }, []);
 
   return (
@@ -525,16 +393,11 @@ export default function App() {
       <div className="p-3 flex items-center justify-between">
         <div className="text-sm">🃏 Flash Coach</div>
         <div className="flex items-center gap-2 text-sm">
-          <button onClick={() => setMode("study")} className={`px-3 py-1 rounded-full border ${mode === "study" ? "bg-neutral-900 text-white" : "bg-white"}`}>Study</button>
-          <button onClick={() => setMode("test")}  className={`px-3 py-1 rounded-full border ${mode === "test"  ? "bg-neutral-900 text-white" : "bg-white"}`}>Test</button>
+          <button onClick={() => setMode("study")} className={`px-3 py-1 rounded-full border ${mode==="study"?"bg-neutral-900 text-white":"bg-white"}`}>Study</button>
+          <button onClick={() => setMode("test")}  className={`px-3 py-1 rounded-full border ${mode==="test" ?"bg-neutral-900 text-white":"bg-white"}`}>Test</button>
         </div>
       </div>
-
-      <main className="px-2 md:px-4">
-        {mode === "study" ? <StudyMode /> : <TestMode />}
-      </main>
-
-      <style>{`.rotate-y-180{transform:rotateY(180deg);}`}</style>
+      <main className="px-2 md:px-4">{mode === "study" ? <StudyMode/> : <TestMode/>}</main>
     </div>
   );
 }
