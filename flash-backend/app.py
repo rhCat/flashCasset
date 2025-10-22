@@ -7,7 +7,7 @@ import re
 import difflib
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, UploadFile, File, Body
+from fastapi import FastAPI, Request, UploadFile, File, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -16,8 +16,22 @@ EN_STOP = set("""
 a about above after again against all am an and any are as at be because been before being below between both but by can did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with you your yours yourself yourselves
 """.split())
 
-CARDS_PATH = os.environ.get("CARDS_JSON_PATH", os.path.join(os.getcwd(), "public", "cards.json"))
+CARDS_BASE_DIR = os.getenv("CARDS_BASE_DIR", "/Users/ruihe/mnt/flashcards")
+DEFAULT_CARDS_NAME = os.getenv("CARDS_DEFAULT_NAME", "cards.json")
 
+def _resolve_cards_path(name: str | None) -> str:
+    """
+    Resolve a safe absolute path within CARDS_BASE_DIR, force .json extension,
+    and block path traversal.
+    """
+    base = os.path.realpath(CARDS_BASE_DIR)
+    fname = os.path.basename(name or DEFAULT_CARDS_NAME)
+    if not fname.endswith(".json"):
+        fname += ".json"
+    full = os.path.realpath(os.path.join(base, fname))
+    if not (full == base or full.startswith(base + os.sep)):
+        raise HTTPException(status_code=400, detail="Invalid deck name/path.")
+    return full
 
 def normalize(txt: str) -> str:
     # lower, remove punctuation but keep CJK chars
@@ -219,20 +233,43 @@ async def process_test(request: Request):
 
 
 @app.get("/fcasset/api/cards")
-async def get_cards():
+async def get_cards(name: str | None = None):
+    """
+    Read a deck JSON from CARDS_BASE_DIR. Use ?name=deck1 (-> deck1.json).
+    If name is omitted, uses $CARDS_DEFAULT_NAME (default 'cards.json').
+    """
+    path = _resolve_cards_path(name)
     try:
-        with open(CARDS_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        return {"cards": [], "hard": [], "know": [], "mark": []}
+        return {"cards": [], "hard": [], "know": [], "mark": [], "_file": path}
 
 
 @app.put("/fcasset/api/cards")
-async def write_cards(payload: Dict[str, Any] = Body(...)):
-    os.makedirs(os.path.dirname(CARDS_PATH), exist_ok=True)
-    with open(CARDS_PATH, "w", encoding="utf-8") as f:
+async def write_cards(payload: Dict[str, Any] = Body(...), name: str | None = None):
+    """
+    Write a deck JSON to CARDS_BASE_DIR. Use ?name=deck1 (-> deck1.json).
+    """
+    path = _resolve_cards_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    return {"ok": True, "path": CARDS_PATH}
+    return {"ok": True, "path": path}
+
+@app.get("/fcasset/api/cards/list")
+async def list_cards():
+    try:
+        files = sorted(
+            [f for f in os.listdir(CARDS_BASE_DIR) if f.lower().endswith(".json")]
+        )
+    except FileNotFoundError:
+        files = []
+    return {
+        "base_dir": CARDS_BASE_DIR,
+        "files": files,
+        "default": DEFAULT_CARDS_NAME if DEFAULT_CARDS_NAME.endswith(".json") else f"{DEFAULT_CARDS_NAME}.json",
+    }
 
 if __name__ == "__main__":
     import uvicorn

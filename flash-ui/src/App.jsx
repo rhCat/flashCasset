@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSwipeable } from "react-swipeable";
 
+/** ------- deployment-aware bases (subpath + api) ------- */
+const BASE = (import.meta.env.BASE_URL || "/");              // e.g. "/fcasset/"
+const API_BASE = (import.meta.env.VITE_API_BASE || `${BASE}api/`); // e.g. "/fcasset/api/"
+
 /**
  * Flash Coach — Study (refined) + Test (minimal)
- * - Study: Left/Right navigate; Up=Hard; Down=Know; tap to flip (3D)
- * - Review filters: All | Marked | Hard
- * - Card matrix shows *ID* (with tooltip), status rings (mark/hard/current)
- * - Choose deck JSON (client file loader). Writes back updates to /api/cards (PUT),
- *   and falls back to downloading a new JSON if the server route isn't available.
- * - Loads /public/cards.json into localStorage on boot
+ * - Study: Left/Right navigate; Up=Hard; Down=Know; tap to flip (overlay swap)
+ * - Filters: All | Marked | Hard
+ * - Card matrix: quick jump + status rings
+ * - Decks: load/save to server via /fcasset/api/cards[?name=...]
+ * - Loads /public/cards.json on boot if available
  */
 
 const SAMPLE = `front,back,durationSec
@@ -18,7 +21,6 @@ capricious,反复无常的; given to sudden changes,10`;
 
 function fixText(s) {
   if (typeof s !== "string") return "";
-  // turn literal "\n" or "\r\n" into real line breaks
   return s.replace(/\\r?\\n/g, "\n");
 }
 
@@ -45,10 +47,11 @@ function parseDeck(raw, defaultSeconds = 12) {
       marked: false,
     }));
 }
+
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const load = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
 
-// ---------- helpers to (a) apply cards JSON, (b) build JSON from state, (c) persist ----------
+/** ------- cards.json → local state (used by first boot hydrate) ------- */
 function applyCardsJsonObject(j, name = "default") {
   const hard = new Set(j.hard || []);
   const know = new Set(j.know || []);
@@ -66,45 +69,17 @@ function applyCardsJsonObject(j, name = "default") {
     marked: mark.has(c.id),
   }));
   save("study_cards", cards);
-  save("study_queue", cards.map(c => c.id)); // unique, single queue
+  save("study_queue", cards.map(c => c.id));
   const testCsv = ["front,back,durationSec", ...(j.cards || []).map(c => `${c.term},${c.meaning},12`)].join("\n");
   save("test_deckRaw", testCsv);
   save("deck_name", name);
   window.dispatchEvent(new CustomEvent("cardsjson:loaded"));
 }
-function buildCardsJsonFromState(cards) {
-  return {
-    cards: cards.map(c => ({ id: c.id, term: c.front, meaning: c.back })),
-    hard: cards.filter(c => c.lastGrade === 3).map(c => c.id),
-    know: cards.filter(c => c.lastGrade === 5).map(c => c.id),
-    mark: cards.filter(c => c.marked).map(c => c.id),
-  };
-}
-async function tryPutToServer(jsonPayload) {
-  try {
-    const r = await fetch("/fcasset/api/cards", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(jsonPayload),
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-function downloadJson(jsonPayload, filename = "cards.updated.json") {
-  const blob = new Blob([JSON.stringify(jsonPayload, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
 
-// ---- hydrate /public/cards.json on boot (default deck) ----
+/** ------- optional: first-boot hydrate from /public/cards.json ------- */
 async function hydrateFromCardsJson() {
   try {
-    const r = await fetch("/cards.json", { cache: "no-store" });
+    const r = await fetch(`${BASE}cards.json`, { cache: "no-store", credentials: "include" });
     if (!r.ok) return false;
     const j = await r.json();
     applyCardsJsonObject(j, "default");
@@ -114,7 +89,7 @@ async function hydrateFromCardsJson() {
   }
 }
 
-// -------------------- Study --------------------
+/** ------- scheduler ------- */
 function schedule(card, grade) {
   let { ease, interval, reps } = card;
   if (grade >= 3) {
@@ -130,19 +105,19 @@ function schedule(card, grade) {
   return { ...card, ease, interval, reps, due, lastGrade: grade };
 }
 
+/** ------- shared study state ------- */
 function useStudyDeck() {
   const [cards, setCards] = useState(() => load("study_cards", parseDeck(SAMPLE)));
   const [queue, setQueue] = useState(() => {
     const ids = load("study_queue", cards.map(c => c.id));
     return [...new Set(ids)];
   });
-  const deckName = load("deck_name", "default");
 
   // persist
   useEffect(() => { save("study_cards", cards); }, [cards]);
   useEffect(() => { save("study_queue", queue); }, [queue]);
 
-  // handle cards.json hydration
+  // react to cardsjson:loaded (hydrate)
   useEffect(() => {
     const h = () => { setCards(load("study_cards", [])); setQueue(load("study_queue", [])); };
     window.addEventListener("cardsjson:loaded", h);
@@ -152,21 +127,64 @@ function useStudyDeck() {
   const replaceCard = (u) => setCards(cs => cs.map(c => c.id === u.id ? u : c));
   const byId = (id) => cards.find(c => c.id === id);
 
-  return { cards, setCards, queue, setQueue, replaceCard, byId, deckName };
+  return { cards, setCards, queue, setQueue, replaceCard, byId };
 }
 
+/** ===================== Study Mode ===================== */
 function StudyMode({ externalFilter = "all", setExternalFilter }) {
   const { cards, queue, setQueue, replaceCard, byId } = useStudyDeck();
 
-  // deck name (persisted so it shows in header)
+  // server-side decks
+  const [serverDecks, setServerDecks] = useState([]);
+  const [serverName, setServerName] = useState(""); // without .json
   const [deckName, setDeckName] = useState(load("deck_name", "default"));
 
-  // filter is driven by the app header (if provided)
+  useEffect(() => {
+    fetch(`${API_BASE}cards/list`, { credentials: "include" })
+      .then(r => r.json())
+      .then(j => {
+        const files = j.files || [];
+        setServerDecks(files);
+        const guess = files.includes("cards.json")
+          ? "cards"
+          : (files[0]?.replace(/\.json$/,"") || "");
+        if (guess) setServerName(guess);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function loadServerDeck() {
+    if (!serverName) return;
+    const r = await fetch(`${API_BASE}cards?name=${encodeURIComponent(serverName)}`, { credentials: "include" });
+    if (!r.ok) return alert("Failed to load deck from server");
+    const obj = await r.json();
+    applyDeckFromJson(obj, serverName);
+  }
+  async function saveServerDeck() {
+    if (!serverName) return alert("Pick a server deck name first");
+    const payload = {
+      name: serverName,
+      cards: cards.map(c => ({ id: c.id, term: c.front, meaning: c.back })),
+      hard:  cards.filter(c => c.lastGrade === 3).map(c => c.id),
+      know:  cards.filter(c => c.lastGrade === 5).map(c => c.id),
+      mark:  cards.filter(c => c.marked).map(c => c.id),
+    };
+    const r = await fetch(`${API_BASE}cards?name=${encodeURIComponent(serverName)}`, {
+      method: "PUT",
+      headers: { "Content-Type":"application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) return alert("Save failed");
+    alert("Saved ✔︎");
+  }
+
+  // filter driven by header (parent)
   const [filter, setFilter] = useState(externalFilter);
   useEffect(() => setFilter(externalFilter), [externalFilter]);
   useEffect(() => { setExternalFilter?.(filter); }, [filter, setExternalFilter]);
 
-  // visible queue from filter
+  // visible queue
   const visibleIds = useMemo(() => {
     if (filter === "marked") return queue.filter(id => byId(id)?.marked);
     if (filter === "hard")   return queue.filter(id => byId(id)?.lastGrade === 3);
@@ -180,22 +198,26 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
 
   function jumpRandom() {
     if (!visibleIds.length) return;
-    // pick a different index when possible
     let ni = Math.floor(Math.random() * visibleIds.length);
     if (visibleIds.length > 1 && ni === i) ni = (ni + 1) % visibleIds.length;
     setI(ni);
     setFlipped(false);
   }
 
+  const isMobile = typeof navigator !== "undefined" && /iPhone|iPad|Android/i.test(navigator.userAgent);
+
   // swipe + keys
   const handlers = useSwipeable({
     onSwipedLeft:  () => setI(v => Math.min(visibleIds.length - 1, v + 1)),
     onSwipedRight: () => setI(v => Math.max(0, v - 1)),
-    onSwipedUp:    () => grade(3),   // Hard
-    onSwipedDown:  () => grade(5),   // Know
+    onSwipedUp:    () => { if (!isMobile) grade(3); },
+    onSwipedDown:  () => { if (!isMobile) grade(5); },
     trackMouse: true,
-    preventScrollOnSwipe: true,
+    preventScrollOnSwipe: false,
+    touchEventOptions: { passive: true },
+    delta: 20,
   });
+
   useEffect(() => {
     function onKey(e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -205,13 +227,13 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       else if (k === "arrowup") grade(3);
       else if (k === "arrowdown" || k === " ") { e.preventDefault(); grade(5); }
       else if (k === "f") setFlipped(f => !f);
-      else if (k === "r") jumpRandom();   // 🎲 random
+      else if (k === "r") jumpRandom();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [visibleIds.length, current]);
 
-  // flip (overlay swap; center-center)
+  // flip (overlay swap)
   const [flipped, setFlipped] = useState(false);
   function grade(g) {
     if (!current) return;
@@ -221,7 +243,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
     setFlipped(false);
   }
 
-  // absolute index in the full deck (1-based)
+  // absolute index (1-based)
   const absoluteIdx = useMemo(() => {
     if (!current) return 0;
     const pos = cards.findIndex(c => c.id === current.id);
@@ -244,7 +266,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
     </>
   ) : <>No cards</>;
 
-  // ----- Deck controls (bottom) -----
+  // ---- local JSON apply/choose/save (kept) ----
   function applyDeckFromJson(obj, name = "custom") {
     try {
       const hard = new Set(obj.hard || []);
@@ -283,7 +305,12 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       mark: cards.filter(c => c.marked).map(c => c.id),
     };
     try {
-      await fetch("/fcasset/api/cards", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      await fetch(`${API_BASE}cards`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload)
+      });
       alert("Deck saved.");
     } catch (e) { console.error(e); alert("Save failed"); }
   }
@@ -293,49 +320,73 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       <aside className="hidden md:block col-span-1" />
       <section className="col-span-5 md:col-span-3">
         <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
-
-          {/* CARD — overlay swap; geometric center */}
-          <div className="flex-1 min-h-0 flex items-center justify-center p-3">
-            {current ? (
-              <button
-                onClick={() => setFlipped(f => !f)}
-                className="relative w-full h-full rounded-xl shadow-lg border overflow-hidden bg-neutral-900 focus:outline-none"
-                aria-label="Toggle face"
-              >
-                {/* FRONT */}
-                <div className="absolute inset-0" style={{ opacity: flipped ? 0 : 1, pointerEvents: flipped ? "none" : "auto", transition: "opacity 220ms ease" }}>
-                  <div style={{
-                    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-                    width: "calc(100% - 48px)", maxHeight: "calc(100% - 48px)", overflow: "auto",
-                    textAlign: "center", color: "white", fontWeight: 700, fontSize: 72, lineHeight: 1.25,
-                    whiteSpace: "pre-wrap", overflowWrap: "anywhere",
-                  }}>{current.front}</div>
+          {/* CARD — bounded, mobile-safe */}
+          <div className="flex-1 min-h-0 p-2 md:p-3">
+            <div
+              className="relative mx-auto w-full"
+              style={{
+                height: "calc(100svh - 220px)",
+                maxHeight: "calc(82vh)",
+                maxWidth: "900px",
+              }}
+            >
+              <div className="absolute inset-0 rounded-2xl bg-white ring-1 ring-neutral-200 shadow-sm" aria-hidden />
+              {current ? (
+                <button
+                  onClick={() => setFlipped(f => !f)}
+                  className="group absolute inset-2 rounded-2xl bg-neutral-900 ring-1 ring-neutral-300 shadow-2xl overflow-hidden focus:outline-none"
+                  aria-label="Toggle face"
+                  style={{ touchAction: "pan-y" }}
+                >
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 h-1.5 w-16 rounded-full bg-white/20 pointer-events-none" />
+                  {/* Front */}
+                  <div className="absolute inset-0 transition-opacity duration-200"
+                       style={{ opacity: flipped ? 0 : 1, pointerEvents: flipped ? "none" : "auto" }}>
+                    <div className="mx-auto text-center text-white font-bold"
+                         style={{
+                           position: "absolute",
+                           top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                           width: "calc(100% - 56px)", maxHeight: "calc(100% - 56px)",
+                           overflow: "auto", WebkitOverflowScrolling: "touch",
+                           overscrollBehavior: "contain",
+                           whiteSpace: "pre-wrap", overflowWrap: "anywhere",
+                           lineHeight: 1.25, fontSize: 72,
+                         }}>
+                      {current.front}
+                    </div>
+                  </div>
+                  {/* Back */}
+                  <div className="absolute inset-0 transition-opacity duration-200"
+                       style={{ opacity: flipped ? 1 : 0, pointerEvents: flipped ? "auto" : "none" }}>
+                    <div className="mx-auto text-center text-white font-bold"
+                         style={{
+                           position: "absolute",
+                           top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                           width: "calc(100% - 56px)", maxHeight: "calc(100% - 56px)",
+                           overflow: "auto", WebkitOverflowScrolling: "touch",
+                           overscrollBehavior: "contain",
+                           whiteSpace: "pre-wrap", overflowWrap: "anywhere",
+                           lineHeight: 1.25, fontSize: 32,
+                         }}>
+                      {fixText(current.back)}
+                    </div>
+                  </div>
+                </button>
+              ) : (
+                <div className="absolute inset-0 grid place-items-center text-neutral-500">
+                  Add <code>public/cards.json</code> then reload, or choose a JSON file.
                 </div>
-                {/* BACK */}
-                <div className="absolute inset-0" style={{ opacity: flipped ? 1 : 0, pointerEvents: flipped ? "auto" : "none", transition: "opacity 220ms ease" }}>
-                  <div style={{
-                    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-                    width: "calc(100% - 48px)", maxHeight: "calc(100% - 48px)", overflow: "auto",
-                    textAlign: "center", color: "white", fontWeight: 700, fontSize: 32, lineHeight: 1.25,
-                    whiteSpace: "pre-wrap", overflowWrap: "anywhere",
-                  }}>{typeof fixText === "function" ? fixText(current.back) : current.back}</div>
-                </div>
-              </button>
-            ) : (
-              <div className="text-neutral-500">Add <code>public/cards.json</code> then reload, or choose a JSON file.</div>
-            )}
+              )}
+            </div>
           </div>
 
-          {/* footer — hint on left • Mark + Random + Filters on right (single row) */}
-          <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
-            {/* left: tooltip + count */}
+          {/* footer — hint + count left • mark/random/filters right */}
+          <div className="px-3 py-2 pb-[max(0px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3 flex-wrap">
             <div className="flex flex-col">
               <div className="text-xs text-neutral-500">
-                Swipe ←/→ to move • ↑ = Hard • ↓/Space = Know • Tap card to flip • R = Random
+                Swipe ←/→ • ↑ = Hard • ↓/Space = Know • Tap to flip • R = Random
               </div>
-              <div className="text-xs text-neutral-700 mt-1">
-                {countText}
-              </div>
+              <div className="text-xs text-neutral-700 mt-1">{countText}</div>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
@@ -348,7 +399,6 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                   ✳︎ Mark
                 </button>
               )}
-
               <button
                 onClick={jumpRandom}
                 className="px-3 py-1 rounded-md border text-xs bg-white"
@@ -356,18 +406,12 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
               >
                 🎲 Random
               </button>
-
-              {/* small divider (optional) */}
               <span className="hidden sm:inline-block w-px h-5 bg-neutral-300 mx-1" />
-
-              {/* Filters now live here */}
               {["all", "marked", "hard"].map(f => (
                 <button
                   key={f}
                   onClick={() => { setFilter(f); setI(0); }}
-                  className={`px-2 py-1 rounded-full border text-xs ${
-                    filter === f ? "bg-neutral-900 text-white" : "bg-white"
-                  }`}
+                  className={`px-2 py-1 rounded-full border text-xs ${filter === f ? "bg-neutral-900 text-white" : "bg-white"}`}
                   title={`Show ${f}`}
                 >
                   {f[0].toUpperCase() + f.slice(1)}
@@ -375,19 +419,29 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
               ))}
             </div>
           </div>
-
-    
         </div>
 
-        {/* Deck controls (bottom) */}
+        {/* Deck controls */}
         <div className="mt-3 rounded-xl border bg-white p-3">
           <div className="text-xs font-medium mb-2">Deck Controls</div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="px-2 py-2 rounded-md border bg-white"
+              value={serverName}
+              onChange={e => setServerName(e.target.value)}
+            >
+              {serverDecks.map(f => (
+                <option key={f} value={f.replace(/\.json$/,"")}>{f}</option>
+              ))}
+            </select>
+            <button onClick={loadServerDeck} className="px-3 py-2 rounded-md border bg-white">Load Server Deck</button>
+            <button onClick={saveServerDeck} className="px-3 py-2 rounded-md border bg-white">Save to Server</button>
+            <span className="hidden sm:inline-block w-px h-5 bg-neutral-300 mx-1" />
             <label className="px-3 py-2 rounded-md border bg-white cursor-pointer">
-              Choose JSON
+              Choose JSON (local)
               <input type="file" accept="application/json" className="hidden" onChange={onChooseJson} />
             </label>
-            <button onClick={saveDeck} className="px-3 py-2 rounded-md border bg-white">Save Deck</button>
+            <button onClick={saveDeck} className="px-3 py-2 rounded-md border bg-white">Save (default)</button>
             <div className="text-xs text-neutral-600">
               <span className="font-medium">Deck:</span> {deckName}
               <span className="mx-1 text-neutral-400">•</span> Total: {cards.length}
@@ -395,7 +449,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
           </div>
         </div>
 
-        {/* Collapsible matrix */}
+        {/* Matrix */}
         <details className="mt-3 rounded-xl border bg-white" open>
           <summary className="cursor-pointer p-3 text-sm font-medium select-none">Card Matrix</summary>
           <div className="p-3 pt-0">
@@ -430,108 +484,107 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
   );
 }
 
+/** ===================== Minimal Test ===================== */
+function TestMode() {
+  const [deckRaw, setDeckRaw] = useState(load("test_deckRaw", SAMPLE));
+  const [secondsPerCard, setSecondsPerCard] = useState(load("test_secondsPerCard", 12));
+  const [stage, setStage] = useState("setup"); // setup | running | review
+  const deck = useMemo(() => parseDeck(deckRaw, secondsPerCard), [deckRaw, secondsPerCard]);
 
-  // -------------------- Minimal Test (unchanged behavior) --------------------
-  function TestMode() {
-    const [deckRaw, setDeckRaw] = useState(load("test_deckRaw", SAMPLE));
-    const [secondsPerCard, setSecondsPerCard] = useState(load("test_secondsPerCard", 12));
-    const [stage, setStage] = useState("setup"); // setup | running | review
-    const deck = useMemo(() => parseDeck(deckRaw, secondsPerCard), [deckRaw, secondsPerCard]);
+  const [idx, setIdx] = useState(0);
+  const [countdown, setCountdown] = useState(secondsPerCard);
+  const [recordings, setRecordings] = useState({});
+  const mediaRecRef = useRef(null);
+  const streamRef = useRef(null);
+  const timerRef = useRef(null);
 
-    const [idx, setIdx] = useState(0);
-    const [countdown, setCountdown] = useState(secondsPerCard);
-    const [recordings, setRecordings] = useState({});
-    const mediaRecRef = useRef(null);
-    const streamRef = useRef(null);
-    const timerRef = useRef(null);
+  useEffect(() => { save("test_deckRaw", deckRaw); }, [deckRaw]);
+  useEffect(() => { save("test_secondsPerCard", secondsPerCard); }, [secondsPerCard]);
 
-    useEffect(() => { save("test_deckRaw", deckRaw); }, [deckRaw]);
-    useEffect(() => { save("test_secondsPerCard", secondsPerCard); }, [secondsPerCard]);
+  const handlers = useSwipeable({
+    onSwipedLeft: () => stage === "running" && nextCard(),
+    onSwipedRight: () => stage === "running" && nextCard(),
+    trackMouse: true, preventScrollOnSwipe: true
+  });
 
-    const handlers = useSwipeable({
-      onSwipedLeft: () => stage === "running" && nextCard(),
-      onSwipedRight: () => stage === "running" && nextCard(),
-      trackMouse: true, preventScrollOnSwipe: true
-    });
+  useEffect(() => {
+    const h = () => setDeckRaw(load("test_deckRaw", deckRaw));
+    window.addEventListener("cardsjson:loaded", h);
+    return () => window.removeEventListener("cardsjson:loaded", h);
+    // eslint-disable-next-line
+  }, []);
 
-    useEffect(() => {
-      const h = () => setDeckRaw(load("test_deckRaw", deckRaw));
-      window.addEventListener("cardsjson:loaded", h);
-      return () => window.removeEventListener("cardsjson:loaded", h);
-      // eslint-disable-next-line
-    }, []);
-
-    function stopTimers() { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } }
-    function stopCardRecording() {
-      try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch {}
-      try { streamRef.current && streamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+  function stopTimers() { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } }
+  function stopCardRecording() {
+    try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch {}
+    try { streamRef.current && streamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+  }
+  async function startCardRecordingAt(index) {
+    stopTimers(); stopCardRecording();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const rec = new MediaRecorder(stream);
+      mediaRecRef.current = rec;
+      const chunks = [];
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        const card = deck[index];
+        if (card) setRecordings(prev => ({ ...prev, [card.id]: blob }));
+        try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      };
+      rec.start();
+      const dur = deck[index]?.durationSec || secondsPerCard;
+      setCountdown(dur);
+      timerRef.current = window.setInterval(() => {
+        setCountdown(c => {
+          if (c <= 1) { clearInterval(timerRef.current); nextCard(); return 0; }
+          return c - 1;
+        });
+      }, 1000);
+    } catch (e) {
+      alert("Microphone permission is required.");
+      console.error(e);
     }
-    async function startCardRecordingAt(index) {
-      stopTimers(); stopCardRecording();
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = stream;
-        const rec = new MediaRecorder(stream);
-        mediaRecRef.current = rec;
-        const chunks = [];
-        rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-        rec.onstop = () => {
-          const blob = new Blob(chunks, { type: "audio/webm" });
-          const card = deck[index];
-          if (card) setRecordings(prev => ({ ...prev, [card.id]: blob }));
-          try { stream.getTracks().forEach(t => t.stop()); } catch {}
-        };
-        rec.start();
-        const dur = deck[index]?.durationSec || secondsPerCard;
-        setCountdown(dur);
-        timerRef.current = window.setInterval(() => {
-          setCountdown(c => {
-            if (c <= 1) { clearInterval(timerRef.current); nextCard(); return 0; }
-            return c - 1;
-          });
-        }, 1000);
-      } catch (e) {
-        alert("Microphone permission is required.");
-        console.error(e);
-      }
-    }
-
-    function startTest() { if (!deck.length) return; setIdx(0); setStage("running"); startCardRecordingAt(0); }
-    function nextCard() {
-      stopTimers(); stopCardRecording();
-      if (idx + 1 < deck.length) { const n = idx + 1; setIdx(n); setTimeout(() => startCardRecordingAt(n), 150); }
-      else setStage("review");
-    }
-    useEffect(() => () => { stopTimers(); stopCardRecording(); }, []);
-
-    return (
-      <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
-        <aside className="hidden md:block col-span-1" />
-        <section className="col-span-5 md:col-span-3">
-          <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
-            <div className="flex items-center justify-between px-3 py-2">
-              <div className="text-xs text-neutral-600">
-                {stage === "running" ? <>Card {idx + 1}/{deck.length} • <b>{countdown}s</b></> : <>Cards: {deck.length}</>}
-              </div>
-              {stage !== "running" && <button onClick={startTest} className="px-3 py-1 rounded-md border text-xs bg-white">Start</button>}
-            </div>
-            <div className="flex-1 min-h-0 flex items-center justify-center p-3">
-              {stage === "running" && deck[idx] && (
-                <div className="w-full h-full rounded-xl border shadow flex items-center justify-center text-center bg-neutral-900">
-                  <div className="text-white font-bold" style={{ fontSize: 48 }}>{deck[idx].front}</div>
-                </div>
-              )}
-              {stage !== "running" && <div className="text-neutral-600">Test not running.</div>}
-            </div>
-            <div className="px-3 py-2 text-center text-xs text-neutral-500">Swipe ←/→ or press Enter to advance</div>
-          </div>
-        </section>
-        <aside className="hidden md:block col-span-1" />
-      </div>
-    );
   }
 
-// -------------------- Root --------------------
+  function startTest() { if (!deck.length) return; setIdx(0); setStage("running"); startCardRecordingAt(0); }
+  function nextCard() {
+    stopTimers(); stopCardRecording();
+    if (idx + 1 < deck.length) { const n = idx + 1; setIdx(n); setTimeout(() => startCardRecordingAt(n), 150); }
+    else setStage("review");
+  }
+  useEffect(() => () => { stopTimers(); stopCardRecording(); }, []);
+
+  return (
+    <div className="grid grid-cols-5 gap-3" style={{ minHeight: "82vh" }} {...handlers}>
+      <aside className="hidden md:block col-span-1" />
+      <section className="col-span-5 md:col-span-3">
+        <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
+          <div className="flex items-center justify-between px-3 py-2">
+            <div className="text-xs text-neutral-600">
+              {stage === "running" ? <>Card {idx + 1}/{deck.length} • <b>{countdown}s</b></> : <>Cards: {deck.length}</>}
+            </div>
+            {stage !== "running" && <button onClick={startTest} className="px-3 py-1 rounded-md border text-xs bg-white">Start</button>}
+          </div>
+          <div className="flex-1 min-h-0 flex items-center justify-center p-3">
+            {stage === "running" && deck[idx] && (
+              <div className="w-full h-full rounded-xl border shadow flex items-center justify-center text-center bg-neutral-900">
+                <div className="text-white font-bold" style={{ fontSize: 48 }}>{deck[idx].front}</div>
+              </div>
+            )}
+            {stage !== "running" && <div className="text-neutral-600">Test not running.</div>}
+          </div>
+          <div className="px-3 py-2 text-center text-xs text-neutral-500">Swipe ←/→ or press Enter to advance</div>
+        </div>
+      </section>
+      <aside className="hidden md:block col-span-1" />
+    </div>
+  );
+}
+
+/** ===================== Root ===================== */
 export default function App() {
   const [mode, setMode] = useState(load("ui_mode", "study"));
   const [uiFilter, setUiFilter] = useState("all"); // all | marked | hard
@@ -539,10 +592,15 @@ export default function App() {
   useEffect(() => { (async () => { await hydrateFromCardsJson(); })(); }, []);
 
   return (
-    <div className="min-h-screen bg-neutral-100">
+    <div
+      className="min-h-svh bg-neutral-100"
+      style={{
+        paddingTop: "env(safe-area-inset-top)",
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+    >
       <header className="px-3 py-1.5 flex items-center justify-between flex-wrap gap-2 border-b bg-white">
         <div className="text-sm">🃏 Flash Coach</div>
-
         <div className="flex items-center text-sm">
           <button
             onClick={() => setMode("study")}
@@ -556,12 +614,10 @@ export default function App() {
           >
             Test
           </button>
-
-          {/* Filters shown when in Study mode */}
         </div>
       </header>
 
-    <main className="px-2 md:px-4 pt-2">
+      <main className="px-2 md:px-4 pt-2">
         {mode === "study"
           ? <StudyMode externalFilter={uiFilter} setExternalFilter={setUiFilter}/>
           : <TestMode/>}
