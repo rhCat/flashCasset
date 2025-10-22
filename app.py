@@ -7,7 +7,7 @@ import re
 import difflib
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 EN_STOP = set("""
 a about above after again against all am an and any are as at be because been before being below between both but by can did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with you your yours yourself yourselves
 """.split())
+
+CARDS_PATH = os.environ.get("CARDS_JSON_PATH", os.path.join(os.getcwd(), "public", "cards.json"))
 
 
 def normalize(txt: str) -> str:
@@ -61,12 +63,12 @@ UPLOAD_ROOT = os.environ.get("UPLOAD_ROOT", "./uploads")
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
 
-@app.get("/api/health")
+@app.get("/fcasset/api/health")
 async def health():
     return {"ok": True, "ts": time.time()}
 
 
-@app.post("/api/transcribe")
+@app.post("/fcasset/api/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     """Optional helper used by Study mode. Returns {text}."""
     if USE_WHISPER and _whisper_model is not None:
@@ -88,7 +90,7 @@ async def transcribe(file: UploadFile = File(...)):
         return {"text": f"[stub transcript] {file.filename} ({size_kb} KB)"}
 
 
-@app.post("/api/process_test")
+@app.post("/fcasset/api/process_test")
 async def process_test(request: Request):
     """
     Accepts multipart form-data with fields:
@@ -214,6 +216,23 @@ async def process_test(request: Request):
         "results": results,
     }
     return JSONResponse(payload)
+
+
+@app.get("/fcasset/api/cards")
+async def get_cards():
+    try:
+        with open(CARDS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"cards": [], "hard": [], "know": [], "mark": []}
+
+
+@app.put("/fcasset/api/cards")
+async def write_cards(payload: Dict[str, Any] = Body(...)):
+    os.makedirs(os.path.dirname(CARDS_PATH), exist_ok=True)
+    with open(CARDS_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "path": CARDS_PATH}
 
 if __name__ == "__main__":
     import uvicorn

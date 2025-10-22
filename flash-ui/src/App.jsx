@@ -82,7 +82,7 @@ function buildCardsJsonFromState(cards) {
 }
 async function tryPutToServer(jsonPayload) {
   try {
-    const r = await fetch("/api/cards", {
+    const r = await fetch("/fcasset/api/cards", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(jsonPayload),
@@ -283,7 +283,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       mark: cards.filter(c => c.marked).map(c => c.id),
     };
     try {
-      await fetch("/api/cards", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      await fetch("/fcasset/api/cards", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       alert("Deck saved.");
     } catch (e) { console.error(e); alert("Save failed"); }
   }
@@ -540,10 +540,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-neutral-100">
-      <header className="p-3 flex items-center justify-between flex-wrap gap-2 border-b bg-white">
+      <header className="px-3 py-1.5 flex items-center justify-between flex-wrap gap-2 border-b bg-white">
         <div className="text-sm">🃏 Flash Coach</div>
 
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex items-center text-sm">
           <button
             onClick={() => setMode("study")}
             className={`px-3 py-1 rounded-full border ${mode==="study"?"bg-neutral-900 text-white":"bg-white"}`}
@@ -561,7 +561,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="px-2 md:px-4">
+    <main className="px-2 md:px-4 pt-2">
         {mode === "study"
           ? <StudyMode externalFilter={uiFilter} setExternalFilter={setUiFilter}/>
           : <TestMode/>}
