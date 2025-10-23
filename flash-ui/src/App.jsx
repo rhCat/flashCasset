@@ -320,65 +320,83 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       <aside className="hidden md:block col-span-1" />
       <section className="col-span-5 md:col-span-3">
         <div className="bg-white rounded-2xl border shadow flex flex-col" style={{ minHeight: "82vh" }}>
-          {/* CARD — bounded, mobile-safe */}
-          <div className="flex-1 min-h-0 p-2 md:p-3">
-            <div
-              className="relative mx-auto w-full"
-              style={{
-                height: "calc(100svh - 220px)",
-                maxHeight: "calc(82vh)",
-                maxWidth: "900px",
-              }}
-            >
-              <div className="absolute inset-0 rounded-2xl bg-white ring-1 ring-neutral-200 shadow-sm" aria-hidden />
+
+
+
+          {/* CARD — bounded, mobile-safe, auto-height */}
+          <div className="flex-1 p-2 md:p-3">
+            <div className="mx-auto w-full max-w-[900px]">
               {current ? (
                 <button
                   onClick={() => setFlipped(f => !f)}
-                  className="group absolute inset-2 rounded-2xl bg-neutral-900 ring-1 ring-neutral-300 shadow-2xl overflow-hidden focus:outline-none"
                   aria-label="Toggle face"
-                  style={{ touchAction: "pan-y" }}
+                  // grid overlay keeps faces stacked while letting the container
+                  // size to the tallest face (no absolute/fixed height!)
+                  className="w-full rounded-2xl ring-1 ring-neutral-200 shadow-sm overflow-hidden
+                            bg-white"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr",
+                    gridTemplateRows: "1fr",
+                    touchAction: "pan-y",
+                  }}
                 >
-                  <div className="absolute top-2 left-1/2 -translate-x-1/2 h-1.5 w-16 rounded-full bg-white/20 pointer-events-none" />
-                  {/* Front */}
-                  <div className="absolute inset-0 transition-opacity duration-200"
-                       style={{ opacity: flipped ? 0 : 1, pointerEvents: flipped ? "none" : "auto" }}>
-                    <div className="mx-auto text-center text-white font-bold"
-                         style={{
-                           position: "absolute",
-                           top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-                           width: "calc(100% - 56px)", maxHeight: "calc(100% - 56px)",
-                           overflow: "auto", WebkitOverflowScrolling: "touch",
-                           overscrollBehavior: "contain",
-                           whiteSpace: "pre-wrap", overflowWrap: "anywhere",
-                           lineHeight: 1.25, fontSize: 72,
-                         }}>
+                  {/* visual card surface */}
+                  <div className="col-start-1 row-start-1 rounded-2xl bg-neutral-900" />
+
+                  {/* FRONT */}
+                  <div
+                    className="col-start-1 row-start-1 transition-opacity duration-200"
+                    style={{ opacity: flipped ? 0 : 1, zIndex: 1 }}
+                  >
+                    <div
+                      className="px-6 py-8 text-center text-white font-bold"
+                      style={{
+                        // content can scroll only if it needs to (no fixed height cap)
+                        overflow: "auto",
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehavior: "contain",
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                        lineHeight: 1.25,
+                        // responsive type: small phones → big desktops
+                        fontSize: "clamp(20px, 6vw, 64px)",
+                      }}
+                    >
                       {current.front}
                     </div>
                   </div>
-                  {/* Back */}
-                  <div className="absolute inset-0 transition-opacity duration-200"
-                       style={{ opacity: flipped ? 1 : 0, pointerEvents: flipped ? "auto" : "none" }}>
-                    <div className="mx-auto text-center text-white font-bold"
-                         style={{
-                           position: "absolute",
-                           top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-                           width: "calc(100% - 56px)", maxHeight: "calc(100% - 56px)",
-                           overflow: "auto", WebkitOverflowScrolling: "touch",
-                           overscrollBehavior: "contain",
-                           whiteSpace: "pre-wrap", overflowWrap: "anywhere",
-                           lineHeight: 1.25, fontSize: 32,
-                         }}>
+
+                  {/* BACK */}
+                  <div
+                    className="col-start-1 row-start-1 transition-opacity duration-200"
+                    style={{ opacity: flipped ? 1 : 0, zIndex: 2 }}
+                  >
+                    <div
+                      className="px-6 py-8 text-center text-white font-bold"
+                      style={{
+                        overflow: "auto",
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehavior: "contain",
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                        lineHeight: 1.25,
+                        fontSize: "clamp(16px, 4.5vw, 32px)",
+                      }}
+                    >
                       {fixText(current.back)}
                     </div>
                   </div>
                 </button>
               ) : (
-                <div className="absolute inset-0 grid place-items-center text-neutral-500">
+                <div className="grid place-items-center text-neutral-500 min-h-[200px]">
                   Add <code>public/cards.json</code> then reload, or choose a JSON file.
                 </div>
               )}
             </div>
           </div>
+
+
 
           {/* footer — hint + count left • mark/random/filters right */}
           <div className="px-3 py-2 pb-[max(0px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3 flex-wrap">
