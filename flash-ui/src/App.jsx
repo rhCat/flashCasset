@@ -196,14 +196,28 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
   useEffect(() => { if (i >= visibleIds.length) setI(Math.max(0, visibleIds.length - 1)); }, [visibleIds.length, i]);
   const current = byId(visibleIds[i]);
 
-  function jumpRandom() {
+  function shuffleVisible() {
     if (!visibleIds.length) return;
-    let ni = Math.floor(Math.random() * visibleIds.length);
-    if (visibleIds.length > 1 && ni === i) ni = (ni + 1) % visibleIds.length;
-    setI(ni);
+
+    setQueue(q => {
+      // we only shuffle the currently visible cards,
+      // and put them at the front of the queue in shuffled order
+      const visibleSet = new Set(visibleIds);
+      const rest = q.filter(id => !visibleSet.has(id));
+
+      const shuffled = [...visibleIds];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+
+      return [...shuffled, ...rest];
+    });
+
+    // start from the first card in the shuffled sequence
+    setI(0);
     setFlipped(false);
   }
-
   const isMobile = typeof navigator !== "undefined" && /iPhone|iPad|Android/i.test(navigator.userAgent);
 
   // swipe + keys
@@ -227,7 +241,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
       else if (k === "arrowup") grade(3);
       else if (k === "arrowdown" || k === " ") { e.preventDefault(); grade(5); }
       else if (k === "f") setFlipped(f => !f);
-      else if (k === "r") jumpRandom();
+      else if (k === "r") shuffleVisible();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -327,13 +341,20 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
           <div className="flex-1 p-2 md:p-3">
             <div className="mx-auto w-full max-w-[900px]">
               {current ? (
-                <button
-                  onClick={() => setFlipped(f => !f)}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setFlipped((f) => !f)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setFlipped((f) => !f);
+                    }
+                  }}
                   aria-label="Toggle face"
                   // grid overlay keeps faces stacked while letting the container
                   // size to the tallest face (no absolute/fixed height!)
-                  className="w-full rounded-2xl ring-1 ring-neutral-200 shadow-sm overflow-hidden
-                            bg-white"
+                  className="w-full rounded-2xl ring-1 ring-neutral-200 shadow-sm overflow-hidden bg-white"
                   style={{
                     display: "grid",
                     gridTemplateColumns: "1fr",
@@ -342,7 +363,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                   }}
                 >
                   {/* visual card surface */}
-                  <div className="col-start-1 row-start-1 rounded-2xl bg-neutral-900" />
+                  <div className="col-start-1 row-start-1 rounded-2xl bg-neutral-900 border border-neutral-600" />
 
                   {/* FRONT */}
                   <div
@@ -350,7 +371,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                     style={{ opacity: flipped ? 0 : 1, zIndex: 1 }}
                   >
                     <div
-                      className="px-6 py-8 text-center text-white font-bold"
+                      className="px-6 py-8 text-center text-white font-bold flex items-center justify-center min-h-[220px]"
                       style={{
                         // content can scroll only if it needs to (no fixed height cap)
                         overflow: "auto",
@@ -360,7 +381,8 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                         overflowWrap: "anywhere",
                         lineHeight: 1.25,
                         // responsive type: small phones → big desktops
-                        fontSize: "clamp(20px, 6vw, 64px)",
+                        fontSize: "36px",      // tweak size
+                        fontWeight: 1000,       // force bold
                       }}
                     >
                       {current.front}
@@ -373,7 +395,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                     style={{ opacity: flipped ? 1 : 0, zIndex: 2 }}
                   >
                     <div
-                      className="px-6 py-8 text-center text-white font-bold"
+                      className="px-6 py-8 text-center text-white font-bold flex items-center justify-center min-h-[220px]"
                       style={{
                         overflow: "auto",
                         WebkitOverflowScrolling: "touch",
@@ -381,13 +403,13 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                         whiteSpace: "pre-wrap",
                         overflowWrap: "anywhere",
                         lineHeight: 1.25,
-                        fontSize: "clamp(16px, 4.5vw, 32px)",
+                        fontSize: "24px", // <- tweak as you like
                       }}
                     >
                       {fixText(current.back)}
                     </div>
                   </div>
-                </button>
+                </div>
               ) : (
                 <div className="grid place-items-center text-neutral-500 min-h-[200px]">
                   Add <code>public/cards.json</code> then reload, or choose a JSON file.
@@ -402,7 +424,7 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
           <div className="px-3 py-2 pb-[max(0px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3 flex-wrap">
             <div className="flex flex-col">
               <div className="text-xs text-neutral-500">
-                Swipe ←/→ • ↑ = Hard • ↓/Space = Know • Tap to flip • R = Random
+                Swipe ←/→ • ↑ = Hard • ↓/Space = Know • Tap to flip • R = Shuffle
               </div>
               <div className="text-xs text-neutral-700 mt-1">{countText}</div>
             </div>
@@ -418,11 +440,11 @@ function StudyMode({ externalFilter = "all", setExternalFilter }) {
                 </button>
               )}
               <button
-                onClick={jumpRandom}
+                onClick={shuffleVisible}   // <- was jumpRandom
                 className="px-3 py-1 rounded-md border text-xs bg-white"
-                title="Jump to a random card (R)"
+                title="Shuffle visible cards (R)"   // <- new tooltip
               >
-                🎲 Random
+                🔀 Shuffle   {/* <- was 🎲 Random */}
               </button>
               <span className="hidden sm:inline-block w-px h-5 bg-neutral-300 mx-1" />
               {["all", "marked", "hard"].map(f => (
