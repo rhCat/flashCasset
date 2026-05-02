@@ -9,7 +9,7 @@ services:
       - CARDS_JSON_PATH=/data/cards/cards.json
     volumes:
       # Host deck folder -> container
-      - /Users/ruihe/mnt/flashcards:/data/cards
+      - ${CARDS_DIR:-./cards}:/data/cards
     ports:
       - "7861:7861"
     restart: unless-stopped
